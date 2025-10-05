@@ -60,6 +60,28 @@ func range_init() (int, int) {
 	return currentCounter, currentCounter + 9999
 }
 
+/**
+ * Pretty simple logic. The file here acts as a counter,
+ * in a production system this would be replicated by maybe a persistent redis node
+ * The file keeps track of range of ids that has been used.
+ * Each node that comes online will first have to get a range of ids, via the range_init function
+ * Once a range is assigned, it's recorded in the file itself, by updating the stored value.
+ * This ensures that each node get's a unique range and if it runs out, it requests a new range.
+ * In case a node drops out before exhausting it's range, some number of IDs are lost
+ */
+
+/**
+ * LIMITATION: IRL the supposed redis node or whatever, becomes a single point of failure.
+ * If that node is down or inaccessible due to network issues, the system grinds to a halt.
+ * One possible solution, is to have multiple redis nodes, each of which has a set number of ranges is can assign.
+ * Whenever a redis node is about to run out of ranges, it will need to be refreshed
+ * which should be a rare event and more tolerant to network issues or other transient failures
+ */
+
+/**
+ * OPTIMIZATION: Can use multi-threading/go-routines here. Use a thread safe queue or counter to keep track of the counter/ID
+ * or perhaps, assign the ID in main and then hand over the request and response ID to the goroutine, to complete?
+ */
 func main() {
 	curr, end := range_init()
 
