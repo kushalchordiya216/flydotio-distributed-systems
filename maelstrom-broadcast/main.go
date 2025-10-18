@@ -3,95 +3,107 @@ package main
 import (
 	"encoding/json"
 	"log"
+	"math/rand"
+	"time"
 
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
 
 func main() {
 	n := maelstrom.NewNode()
+	state := newNodeState(n.ID())
+	gossipInterval := time.Second
 
-	// Store for broadcast messages
-	var messages []int
-	messageChan := make(chan int, 100)
-
-	// Store for topology
-	var topology map[string][]string
-
-	// Goroutine to consume from channel and add to messages store
 	go func() {
-		for msg := range messageChan {
-			messages = append(messages, msg)
+		for {
+			time.Sleep(gossipInterval)
+			peers := peerList(n)
+			if len(peers) == 0 {
+				continue
+			}
+
+			target := peers[rand.Intn(len(peers))]
+			delta, version := state.deltaForPeer(target)
+			if len(delta) == 0 {
+				continue
+			}
+
+			payload := GossipPayload{
+				Type:     "gossip",
+				Messages: delta,
+			}
+
+			n.RPC(target, payload, func(reply maelstrom.Message) error {
+				state.markPeerVersions(target, version) // gossip acknowledged
+
+				var body GossipPayload
+				if err := json.Unmarshal(reply.Body, &body); err != nil {
+					return err
+				}
+				state.addMessages(body.Messages)
+				return nil
+			})
 		}
 	}()
 
-	// Handle broadcast - receives a single message (int) and stores it
 	n.Handle("broadcast", func(msg maelstrom.Message) error {
-		var body map[string]any
+		var body BroadcastPayload
 		if err := json.Unmarshal(msg.Body, &body); err != nil {
 			return err
 		}
 
-		// Extract the message value
-		message := int(body["message"].(float64))
-
-		// Send to channel
-		messageChan <- message
-
-		// Send acknowledgment
-		response := make(map[string]any)
-		response["type"] = "broadcast_ok"
-
-		return n.Reply(msg, response)
+		state.addLocalMessage(body.Message)
+		return n.Reply(msg, map[string]any{"type": "broadcast_ok"})
 	})
 
-	// Handle read - returns all broadcasts so far
+	n.Handle("gossip", func(msg maelstrom.Message) error {
+		var body GossipPayload
+		if err := json.Unmarshal(msg.Body, &body); err != nil {
+			return err
+		}
+
+		state.addMessages(body.Messages)
+		delta, version := state.deltaForPeer(msg.Src)
+		reply := GossipPayload{
+			Type:     "gossip_ok",
+			Messages: delta,
+		}
+		// risque - network partition could fail halfway through, meaning we are marking something as being acknowledged before it is actually acknowledged
+		// Ideally, we make another RPC so that we can get back an ack
+		state.markPeerVersions(msg.Src, version)
+
+		return n.Reply(msg, reply)
+	})
+
 	n.Handle("read", func(msg maelstrom.Message) error {
-		var body map[string]any
-		if err := json.Unmarshal(msg.Body, &body); err != nil {
-			return err
+		response := map[string]any{
+			"type":     "read_ok",
+			"messages": state.snapshotMessages(),
 		}
-
-		// Copy messages for response
-		messagesCopy := make([]int, len(messages))
-		copy(messagesCopy, messages)
-
-		// Send response with all messages
-		response := make(map[string]any)
-		response["type"] = "read_ok"
-		response["messages"] = messagesCopy
-
 		return n.Reply(msg, response)
 	})
 
-	// Handle topology - receives a topology of type map[string][]string
 	n.Handle("topology", func(msg maelstrom.Message) error {
-		var body map[string]any
+		var body TopologyPayload
 		if err := json.Unmarshal(msg.Body, &body); err != nil {
 			return err
 		}
 
-		// Extract and store topology
-		if topo, ok := body["topology"].(map[string]any); ok {
-			topology = make(map[string][]string)
-			for key, value := range topo {
-				if neighbors, ok := value.([]any); ok {
-					strNeighbors := make([]string, len(neighbors))
-					for i, neighbor := range neighbors {
-						strNeighbors[i] = neighbor.(string)
-					}
-					topology[key] = strNeighbors
-				}
-			}
-		}
-
-		// Send acknowledgment
-		response := make(map[string]any)
-		response["type"] = "topology_ok"
-
-		return n.Reply(msg, response)
+		return n.Reply(msg, map[string]any{"type": "topology_ok"})
 	})
 
 	if err := n.Run(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func peerList(n *maelstrom.Node) []string {
+	raw := n.NodeIDs()
+	out := make([]string, 0, len(raw))
+	for _, id := range raw {
+		if id != n.ID() {
+			out = append(out, id)
+		}
+	}
+	return out
 }
