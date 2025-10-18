@@ -11,4 +11,3 @@ Only messages with a version strictly greater than the last recorded version (th
 ## Caveats
 - There is still some redundant data being sent during gossip, for example, two different nodes can send the same data to a third peer in gossip, because each node only tracks what it sent to a peer
 - To avoid this, there would need to be some mechanism to track version data and state across all nodes which would significantly increase the complexity of the system
-- Another caveat here is that there's an implicit assumption that broadcast messages are well distributed between all nodes. If a particular node doesn't receive fresh data for a while, its `currentVersion` keeps rising without new local broadcasts, and a single version can grow large—meaning gossip from this node may still carry a heavy batch when finally triggered.
