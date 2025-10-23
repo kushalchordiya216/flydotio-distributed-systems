@@ -12,7 +12,7 @@ import (
 func main() {
 	n := maelstrom.NewNode()
 	state := newNodeState(n.ID())
-	gossipInterval := time.Second
+	gossipInterval := 50 * time.Millisecond
 
 	go func() {
 		for {
